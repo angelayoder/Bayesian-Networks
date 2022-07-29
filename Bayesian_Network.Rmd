@@ -1,0 +1,323 @@
+---
+title: "Bayesian Network Building"
+author: "Angela Yoder"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    code_folding: hide
+---
+
+**The goals of this program are:**
+
+1. Triplet Summary
+2. Create and Visualize Bayesian Network with Triplet
+
+The following table describes the chosen transcript/SNP/phenotype combination that will be used in the Bayesian Network Analysis. The chosen triplet is a trans eQTL with significant associations between each of the component parts (at a significance level of 0.05). However, even though these associations are significant, heritability is fairly low and the pQTL LOD score for this SNP is below even the suggestive threshold (the LOD score is 2.25 and the 0.05 threshold is 4.31 and the 0.63 threshold is 4.31). Additionally, correlation between transcript expression and acetate AUC is fairly weak at 0.38. 
+
+```{r}
+
+# all triplet summary code from Create_Triplet.Rmd
+
+setwd("C:/Users/yodeange/OneDrive - The University of Colorado Denver/Saba Lab/Data")
+
+summ.brain = read.csv("Summary_Table_topSsec_brain.csv")
+summ.liver = read.csv("Summary_Table_topSsec_liver.csv")
+te.sec.b_table = read.csv("eQTL_BrainTESec_added_table.csv")
+te.sec.l_table = read.csv("eQTL_LiverTESec_added_table.csv")
+geno = read.csv("ALTGenoMAFnomiss_rQTL.csv")
+protein_liver = read.csv("Liver_WGCNA.csv")
+protein_brain = read.csv("Brain_WGCNA.csv")
+bicor_brain = read.csv("Bicor_brain.csv")
+bicor_liver = read.csv("Bicor_liver.csv")
+pheno = read.csv("Pheno_rQTL.csv")
+
+fix.read.csv = function(x)
+{
+  names = x[,1]
+  gee = x[,2:dim(x)[2]]
+  rownames(gee) = names
+  return(gee)
+}
+`%!in%` = Negate(`%in%`)
+
+summ.brain = fix.read.csv(summ.brain)
+summ.liver = fix.read.csv(summ.liver)
+eqtl.brain = fix.read.csv(te.sec.b_table)
+eqtl.liver = fix.read.csv(te.sec.l_table)
+protein_brain = fix.read.csv(protein_brain)
+protein_liver = fix.read.csv(protein_liver)
+bicor_brain = fix.read.csv(bicor_brain)
+bicor_liver = fix.read.csv(bicor_liver)
+
+protein_brain = protein_brain[pheno$ID,]
+protein_liver = protein_liver[pheno$ID,]
+
+```
+
+```{r, eval = FALSE}
+
+################ Do we need this? ##################
+
+# top target genes
+
+all_corr = bicor_brain[rownames(bicor_brain) == "ENSRNOG00000005781",]
+top_corr = all_corr[all_corr < 0.05]
+
+# correlations
+snp.brain = geno$J588980[-c(1, 2)]
+transcript.brain = protein_brain$ENSRNOG00000005781
+pheno.brain = pheno$meanauc2gkg
+
+corr.brain.snptrans = cor.test(snp.brain, transcript.brain)
+corr.brain.snppheno = cor.test(snp.brain, pheno.brain)
+corr.brain.transpheno = cor.test(transcript.brain, pheno.brain)
+
+# table
+
+summary = data.frame(Ensembl = "ENSRNOG00000005781", Gene.Symbol = "Wnt16", SNP = "J588980", eQTL.pval = "0.033", eQTL.FDR = "0.3441", cis.trans = "trans", heritability = "0.4650", Ssec = "09592", Num.Target.Genes = length(top_corr), pQTL.LOD = "2.25 (4.31, 2.57)", Corr.SNP.Transcript = paste(corr.brain.snptrans$estimate, corr.brain.snptrans$p.value), Corr.SNP.Pheno = paste(corr.brain.snppheno$estimate, corr.brain.snppheno$p.value), Corr.Transcript.Pheno = paste(corr.brain.transpheno$estimate, corr.brain.transpheno$p.value))
+
+knitr::kable(summary)
+
+```
+
+```{r, eval = FALSE}
+
+  # snp x transcript
+
+plot(x = factor(snp.brain, levels = c(0, 2)), y = transcript.brain, xlab = "Genotype", ylab = "Phenotype: Transcript Expression", main = "Plot of Genotype x Gene Expression for \n SNP J588980 and Gene Wnt16", sub = paste("Correlation = ", round(corr.brain.snptrans$estimate, 3), ", P-value = ", corr.brain.snptrans$p.value))
+
+  # snp x phenotype
+
+plot(x = factor(snp.brain, levels = c(0, 2)), y = pheno.brain, xlab = "Genotype", ylab = "Phenotype: Acetate AUC", main = "Plot of Genotype x Phenotype for \n SNP J588980 and Acetate AUC", sub = paste("Correlation = ", round(corr.brain.snppheno$estimate, 3), ", P-value = ", corr.brain.snppheno$p.value))
+
+  # transcript x phenotype
+
+plot(x = transcript.brain, y = pheno.brain, xlab = "Transcript Expression", ylab = "Acetate AUC", main = "Plot of Gene Expression x Phenotype for \n Gene Wnt16 and Acetate AUC", sub = paste("Correlation = ", round(corr.brain.transpheno$estimate, 3), ", P-value = ", corr.brain.transpheno$p.value))
+
+```
+
+## SNP-Transcript-Phenotype Triplet Bayesian Network
+
+I'm still working out the kinks with this one, but I have managed to build a Bayesian network with a hill-climbing algorithm, displayed in plot below. All edges out of the phenotype node and all edges into the SNP node were blacklisted. I have also calculated expected log-likelihood loss for a null network with no edges and the hill climbing algorithm network using k-fold cross-validation, shown below. I am still planning on testing individual edges to get p-values.
+
+```{r}
+
+#https://www.bnlearn.com/examples/fit/
+#https://www.bnlearn.com/examples/ci.test/
+#https://www.bnlearn.com/examples/
+
+library(bnlearn)
+
+######################## TRIPLETS ####################################
+
+# Wnt16: eQTL with correlation to phenotype (SNP/Transcript/Pheno)
+triplet = data.frame(SNP = geno$J588980[-c(1:2)], Transcript = protein_brain$ENSRNOG00000005781, Phenotype = pheno$meanauc2gkg)
+rownames(triplet) = pheno$ID
+triplet$SNP = factor(triplet$SNP)
+
+# Cntn4: eQTL with correlation to phenotype (SNP/Transcript/Pheno)
+triplet.1 = data.frame(SNP = geno$WKYc21g03_r1_229[-c(1, 2)], Transcript = protein_brain$ENSRNOG00000005652, Phenotype = pheno$ClearanceEtOH)
+rownames(triplet.1) = pheno$ID
+triplet.1$SNP = factor(triplet.1$SNP)
+triplet.1clean = triplet.1[!is.na(triplet.1$SNP),] # missing SNP at 10
+
+## Ibsp: Highest sig eQTL (SNP/Transcript/Target)
+
+target.genes = bicor_brain[rownames(bicor_brain) == "ENSRNOG00000002158",]
+thisone = which(target.genes == min(target.genes))
+target.name = names(target.genes)[69]
+
+triplet.2 = data.frame(SNP = geno$J506605[-c(1:2)], TES = protein_brain$ENSRNOG00000002158, Target = protein_liver[, colnames(protein_liver) == target.name])
+rownames(triplet.2) = geno[-c(1:2),1]
+triplet.2$SNP = factor(triplet.2$SNP)
+
+## Cntn4: Highest Ssec with sig eQTL (SNP/Transcript/Target)
+
+target.genes = bicor_brain[rownames(bicor_brain) == "ENSRNOG00000005652",]
+thisone = which(target.genes == min(target.genes))
+target.name = names(target.genes)[thisone]
+
+triplet.3 = data.frame(SNP = geno$WKYc21g03_r1_229[-c(1:2)], TES = protein_brain$ENSRNOG00000005652, Target = protein_liver[, colnames(protein_liver) == target.name])
+rownames(triplet.3) = geno[-c(1:2),1]
+triplet.3$SNP = factor(triplet.3$SNP)
+triplet.3clean = triplet.3[!is.na(triplet.3$SNP),] # missing SNP at 10
+
+```
+
+```{r}
+# dag we're hoping for
+arc.set = data.frame(from = c("SNP", "Transcript", "SNP"), to = c("Transcript", "Phenotype", "Phenotype"))
+dag = empty.graph(nodes = c("SNP", "Transcript", "Phenotype"))
+arcs(dag) = arc.set
+# null dag
+null = empty.graph(nodes = c("SNP", "Transcript", "Phenotype"))
+# blacklist
+bl = data.frame(from = c("Phenotype", "Phenotype", "Transcript"), to = c("Transcript", "SNP", "SNP"))
+bl.1 = data.frame(from = c("Target", "Target", "TES"), to = c("TES", "SNP", "SNP"))
+
+bn = hc(triplet, blacklist = bl)
+
+bn.1 = hc(triplet.1clean, blacklist = bl)
+
+bn.2 = hc(triplet.2, blacklist = bl.1)
+
+bn.3 = hc(triplet.3clean, blacklist = bl.1)
+
+plot(bn, main = "Wnt16: S/T/P")
+plot(bn.1, main = "Cntn4: S/T/P")
+plot(bn.2, main = "Ibsp: S/T/T")
+plot(bn.3, main = "Cntn4: S/T/T")
+
+```
+
+We can see below that the null network had a higher expected log-likelihood loss than the learned network. Both used ten folds to calculate loss. I can increase the number of folds if necessary. 
+
+```{r}
+############ FIX THIS #################
+# goodness of fit- im guessing since we can calculate BIC, we can only compare networks with the same nodes. So i think what we're going to do is calculate BIC for fitted network and compare to other networks that are artificially made
+print("Learned Network")
+bn.cv(data = triplet, bn = bn, method = "k-fold")
+
+print("Transcript Influence Network")
+bn.cv(data = triplet, bn = dag, method = "k-fold")
+
+print("Null Network")
+bn.cv(data = triplet, bn = null, method = "k-fold")
+
+## test individual edges
+
+```
+
+```{r}
+# Quadruple
+
+quad = data.frame(triplet.1clean, triplet.3clean$Target)
+colnames(quad)[4] = "Target"
+bl.2 = data.frame(from = c("Target", "Target", "Transcript", "Phenotype", "Phenotype", "Phenotype"), to = c("Transcript", "SNP", "SNP", "SNP", "Transcript", "Target"))
+
+bn.q = hc(quad, blacklist = bl.2)
+
+plot(bn.q, main = "Cntn4: S/T/T/P")
+
+```
+
+## AIM 3B: Testing Bayesian Network
+
+```{r}
+# https://www.bnlearn.com/documentation/man/impute.html
+
+mse = function(x, y)
+{
+  out = (1/length(x)) * sum((x - y)^2) 
+  return(out)
+}
+
+set.seed(444)
+total.mse = numeric(1000)
+for (i in 1:1000)
+{
+  training.set = sort(sample(1:29, 22))
+  test.set = c(1:29)[1:29 %!in% training.set]
+  train.data = triplet.1clean[training.set,]
+  test.data = triplet.1clean[test.set,]
+  
+  training = bn.fit(bn.1, train.data)
+  predicted = predict(training, node = "Phenotype", data = test.data)
+  
+  meanse = mse(predicted, test.data$Phenotype)
+  
+  total.mse[i] = meanse
+  #print(mean(accuracy(predicted, test.data$Phenotype)))
+}
+
+hist(total.mse)
+```
+
+## AIM 3C: Predict Phenotypes
+
+```{r}
+setwd("C:/Users/yodeange/OneDrive - The University of Colorado Denver/Saba Lab/Data")
+full.geno = read.csv("full_hrdp_geno.csv")
+full.geno = t(full.geno)
+full.rnaseq.brain = read.delim("PhenoGen.HRDP.v5.totalRNA.Brain.gene.ensembl96.txt", sep = "\t")
+full.rnaseq.liver = read.delim("PhenoGen.HRDP.v5.totalRNA.Liver.gene.ensembl96.txt", sep = "\t")
+
+```
+Hey
+```{r}
+############# Cleaning RNAseq ###########
+
+inbred.rnaseq.brain = full.rnaseq.brain[,-grep("HXB|BXH", colnames(full.rnaseq.brain))]
+inbred.rnaseq.liver = full.rnaseq.liver[,-grep("HXB|BXH", colnames(full.rnaseq.liver))]
+
+
+strains.brain = sub("_.*", "", colnames(inbred.rnaseq.brain))
+strains.liver = sub("_.*", "", colnames(inbred.rnaseq.liver))
+unique.strains.brain = unique(strains.brain)
+unique.strains.liver = unique(strains.liver)
+
+strainmeans.brain = matrix(NA, nrow = nrow(inbred.rnaseq.brain), ncol = length(unique.strains.brain))
+strainmeans.brain = as.data.frame(strainmeans.brain)
+for (i in 1:length(unique.strains.brain))
+{
+  means = grep(unique.strains.brain[i], colnames(inbred.rnaseq.brain))
+  df = inbred.rnaseq.brain[,means]
+  out = apply(df, 1, mean)
+  strainmeans.brain[,i] = out
+}
+
+rownames(strainmeans.brain) = rownames(inbred.rnaseq.brain)
+colnames(strainmeans.brain) = unique.strains.brain
+
+strainmeans.liver = matrix(NA, nrow = nrow(inbred.rnaseq.liver), ncol = length(unique.strains.liver))
+strainmeans.liver = as.data.frame(strainmeans.liver)
+for (i in 1:length(unique.strains.liver))
+{
+  means = grep(unique.strains.liver[i], colnames(inbred.rnaseq.liver))
+  df = inbred.rnaseq.liver[,means]
+  out = apply(df, 1, mean)
+  strainmeans.liver[,i] = out
+}
+
+rownames(strainmeans.liver) = rownames(inbred.rnaseq.liver)
+colnames(strainmeans.liver) = unique.strains.liver
+
+strainmeans.liver = strainmeans.liver[, unique.strains.brain]
+
+
+strainmeans.brain = t(strainmeans.brain)
+strainmeans.liver = t(strainmeans.liver)
+
+## GENO
+
+edit.geno = full.geno[-c(1:3), ]
+colnames(edit.geno) = full.geno[1,]
+inbred.geno = edit.geno[rownames(edit.geno) %in% rownames(strainmeans.brain),]
+
+red.strainmeans.brain = strainmeans.brain[rownames(strainmeans.brain) %in% rownames(inbred.geno),]
+red.strainmeans.liver = strainmeans.liver[rownames(strainmeans.liver) %in% rownames(inbred.geno),]
+
+inbred.geno = as.data.frame(inbred.geno)
+
+red.strainmeans.brain = as.data.frame(red.strainmeans.brain)
+
+red.strainmeans.brain = red.strainmeans.brain[rownames(inbred.geno),]
+```
+
+```{r}
+
+# Cntn4: eQTL with correlation to phenotype (SNP/Transcript/Pheno)
+triplet.1 = data.frame(SNP = geno$WKYc21g03_r1_229[-c(1, 2)], Transcript = protein_brain$ENSRNOG00000005652, Phenotype = pheno$ClearanceEtOH)
+rownames(triplet.1) = pheno$ID
+triplet.1$SNP = factor(triplet.1$SNP)
+triplet.1clean = triplet.1[!is.na(triplet.1$SNP),] # missing SNP at 10
+
+test.data = data.frame(SNP = inbred.geno$WKYc21g03_r1_229, Transcript = red.strainmeans.brain$ENSRNOG00000005652)
+rownames(test.data) = rownames(inbred.geno)
+test.data$SNP = factor(test.data$SNP)
+
+training = bn.fit(bn.1, triplet.1clean)
+predicted = predict(training, node = "Phenotype", data = test.data)
+
+
+```

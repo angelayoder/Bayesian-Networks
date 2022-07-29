@@ -1,0 +1,99 @@
+---
+title: "Create Triplet"
+author: "Angela Yoder"
+date: "`r Sys.Date()`"
+---
+
+**The goals of this program are:**
+
+1. Create SNP/Transcript/Pheno triplet
+
+The following table describes the chosen transcript/SNP/phenotype combination that will be used in the Bayesian Network Analysis. The chosen triplet is a trans eQTL with significant associations between each of the component parts (at a significance level of 0.05). However, even though these associations are significant, heritability is fairly low and the pQTL LOD score for this SNP is below even the suggestive threshold (the LOD score is 2.25 and the 0.05 threshold is 4.31 and the 0.63 threshold is 4.31). Additionally, correlation between transcript expression and acetate AUC is fairly weak at 0.38. 
+
+```{r, echo = FALSE}
+
+setwd("C:/Users/yodeange/OneDrive - The University of Colorado Denver/Saba Lab/Data")
+
+summ.brain = read.csv("Summary_Table_topSsec_brain.csv")
+summ.liver = read.csv("Summary_Table_topSsec_liver.csv")
+te.sec.b_table = read.csv("eQTL_BrainTESec_added_table.csv")
+te.sec.l_table = read.csv("eQTL_LiverTESec_added_table.csv")
+geno = read.csv("ALTGenoMAFnomiss_rQTL.csv")
+protein_liver = read.csv("Liver_WGCNA.csv")
+protein_brain = read.csv("Brain_WGCNA.csv")
+bicor_brain = read.csv("Bicor_brain.csv")
+bicor_liver = read.csv("Bicor_liver.csv")
+pheno = read.csv("Pheno_rQTL.csv")
+
+fix.read.csv = function(x)
+{
+  names = x[,1]
+  gee = x[,2:dim(x)[2]]
+  rownames(gee) = names
+  return(gee)
+}
+`%!in%` = Negate(`%in%`)
+
+summ.brain = fix.read.csv(summ.brain)
+summ.liver = fix.read.csv(summ.liver)
+eqtl.brain = fix.read.csv(te.sec.b_table)
+eqtl.liver = fix.read.csv(te.sec.l_table)
+protein_brain = fix.read.csv(protein_brain)
+protein_liver = fix.read.csv(protein_liver)
+bicor_brain = fix.read.csv(bicor_brain)
+bicor_liver = fix.read.csv(bicor_liver)
+
+protein_brain = protein_brain[pheno$ID,]
+
+```
+
+```{r, echo = FALSE}
+
+# top target genes
+
+all_corr = bicor_brain[rownames(bicor_brain) == "ENSRNOG00000005781",]
+top_corr = all_corr[all_corr < 0.05]
+
+# correlations
+snp.brain = geno$J588980[-c(1, 2)]
+transcript.brain = protein_brain$ENSRNOG00000005781
+pheno.brain = pheno$meanauc2gkg
+
+corr.brain.snptrans = cor.test(snp.brain, transcript.brain)
+corr.brain.snppheno = cor.test(snp.brain, pheno.brain)
+corr.brain.transpheno = cor.test(transcript.brain, pheno.brain)
+
+# table
+
+summary = data.frame(Ensembl = "ENSRNOG00000005781", Gene.Symbol = "Wnt16", SNP = "J588980", eQTL.pval = "0.033", eQTL.FDR = "0.3441", cis.trans = "trans", heritability = "0.4650", Ssec = "09592", Num.Target.Genes = length(top_corr), pQTL.LOD = "2.25 (4.31, 2.57)", Corr.SNP.Transcript = paste(corr.brain.snptrans$estimate, corr.brain.snptrans$p.value), Corr.SNP.Pheno = paste(corr.brain.snppheno$estimate, corr.brain.snppheno$p.value), Corr.Transcript.Pheno = paste(corr.brain.transpheno$estimate, corr.brain.transpheno$p.value))
+
+knitr::kable(summary)
+
+```
+
+```{r, echo = FALSE}
+
+  # snp x transcript
+
+plot(x = factor(snp.brain, levels = c(0, 2)), y = transcript.brain, xlab = "Genotype", ylab = "Phenotype: Transcript Expression", main = "Plot of Genotype x Gene Expression for \n SNP J588980 and Gene Wnt16", sub = paste("Correlation = ", round(corr.brain.snptrans$estimate, 3), ", P-value = ", corr.brain.snptrans$p.value))
+
+  # snp x phenotype
+
+plot(x = factor(snp.brain, levels = c(0, 2)), y = pheno.brain, xlab = "Genotype", ylab = "Phenotype: Acetate AUC", main = "Plot of Genotype x Phenotype for \n SNP J588980 and Acetate AUC", sub = paste("Correlation = ", round(corr.brain.snppheno$estimate, 3), ", P-value = ", corr.brain.snppheno$p.value))
+
+  # transcript x phenotype
+
+plot(x = transcript.brain, y = pheno.brain, xlab = "Transcript Expression", ylab = "Acetate AUC", main = "Plot of Gene Expression x Phenotype for \n Gene Wnt16 and Acetate AUC", sub = paste("Correlation = ", round(corr.brain.transpheno$estimate, 3), ", P-value = ", corr.brain.transpheno$p.value))
+
+```
+
+```{r, echo = FALSE}
+
+triplet = data.frame(SNP = geno$J588980[-c(1:2)], Transcript = protein_brain$ENSRNOG00000005781, Phenotype = pheno$meanauc2gkg)
+rownames(triplet) = pheno$ID
+
+setwd("C:/Users/yodeange/OneDrive - The University of Colorado Denver/Saba Lab/Data")
+write.csv(triplet, "Triplet_Data.csv")
+
+
+```
